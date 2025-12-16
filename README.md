@@ -135,8 +135,23 @@ $_SESSION['LAST_ACTIVITY'] = time();
 
 ---
 
-## Step 5: Create Logout File (logout.php)
+## Step 5: Create Logout and Login File (logout.php/login.php)
+### File: `login.php`
 
+```<?php
+session_start();
+
+if (isset($_POST['username'])) {
+    $_SESSION['user'] = $_POST['username'];
+    $_SESSION['LAST_ACTIVITY'] = time(); // session last activity time
+    header("Location: dashboard.php");
+    exit();
+} else {
+    header("Location: index.php");
+    exit();
+}
+?>
+```
 ### File: `logout.php`
 
 ```php
@@ -170,5 +185,10 @@ header("Location: index.php");
 3. Enter URL:
 
 ```
-http://localhost/PHP_Set_Session_Timeout
+http://localhost/PHP_Set_Session_Timeout/index.php
 ```
+<img width="1097" height="367" alt="image" src="https://github.com/user-attachments/assets/97139af1-b904-4e4b-9f6c-0b4df7342055" />
+
+<img width="924" height="350" alt="image" src="https://github.com/user-attachments/assets/4e7d6184-aa1a-4ee8-adf6-a7616e4eb625" />
+<img width="1426" height="521" alt="image" src="https://github.com/user-attachments/assets/4ac66b7a-dd1b-4248-ad2b-2303bb720d86" />
+
