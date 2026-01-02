@@ -1,7 +1,3 @@
-<?php
-session_start();
-?>
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -11,7 +7,7 @@ session_start();
 
 <h3>Login</h3>
 
-<form method="post" action="dashboard.php">
+<form method="post" action="login.php">
     Username: <input type="text" name="username" required><br><br>
     <input type="submit" value="Login">
 </form>

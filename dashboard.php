@@ -1,22 +1,15 @@
 <?php
 session_start();
 
-// Set timeout duration (seconds)
-$timeout = 30; // 30 seconds
+// Session timeout in seconds
+$timeout = 10;
 
-// Check login
-if (!isset($_POST['username']) && !isset($_SESSION['user'])) {
+if (!isset($_SESSION['user'])) {
     header("Location: index.php");
     exit();
 }
 
-// Set session if coming from login page
-if (isset($_POST['username'])) {
-    $_SESSION['user'] = $_POST['username'];
-    $_SESSION['LAST_ACTIVITY'] = time();
-}
-
-// Check session timeout
+// Check timeout
 if (isset($_SESSION['LAST_ACTIVITY']) && (time() - $_SESSION['LAST_ACTIVITY']) > $timeout) {
     session_unset();
     session_destroy();
@@ -32,11 +25,18 @@ $_SESSION['LAST_ACTIVITY'] = time();
 <html>
 <head>
     <title>Dashboard</title>
+    <script>
+        // JavaScript to auto reload page after timeout (10 seconds)
+        setTimeout(function(){
+            alert("Session expired! Logging out.");
+            window.location.href = 'logout.php';
+        }, <?php echo $timeout * 1000; ?>);
+    </script>
 </head>
 <body>
 
-<h3>Welcome, <?php echo $_SESSION['user']; ?></h3>
-<p>Session timeout: 30 seconds</p>
+<h3>Welcome, <?php echo htmlspecialchars($_SESSION['user']); ?></h3>
+<p>Session timeout: <?php echo $timeout; ?> seconds</p>
 
 <a href="logout.php">Logout</a>
 
