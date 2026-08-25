@@ -2,16 +2,6 @@
 
     'use strict';
 
-    /*
-    |--------------------------------------------------------------------------
-    | Configuration
-    |--------------------------------------------------------------------------
-    | Default:
-    | Session timeout  = 120 seconds (2 minutes)
-    | Warning time     = 20 seconds
-    |--------------------------------------------------------------------------
-    */
-
     const timeout = Number(
         document.body.dataset.sessionTimeout || 120
     );
@@ -21,13 +11,9 @@
     );
 
     let remaining = timeout;
-
     let countdownInterval = null;
-
     let warningShown = false;
-
     let refreshInProgress = false;
-
     let lastRefresh = 0;
 
 
@@ -55,6 +41,23 @@
 
     /*
     |--------------------------------------------------------------------------
+    | CSRF Token
+    |--------------------------------------------------------------------------
+    */
+
+    const csrfTokenElement =
+        document.querySelector(
+            'meta[name="csrf-token"]'
+        );
+
+    const csrfToken =
+        csrfTokenElement
+            ? csrfTokenElement.getAttribute('content')
+            : '';
+
+
+    /*
+    |--------------------------------------------------------------------------
     | Format Time
     |--------------------------------------------------------------------------
     */
@@ -64,7 +67,6 @@
         seconds = Math.max(0, seconds);
 
         const minutes = Math.floor(seconds / 60);
-
         const secs = seconds % 60;
 
         return String(minutes).padStart(2, '0') +
@@ -88,12 +90,6 @@
         countdownElement.textContent =
             formatTime(remaining);
 
-
-        /*
-        |--------------------------------------------------------------------------
-        | Warning State
-        |--------------------------------------------------------------------------
-        */
 
         if (remaining <= warningTime) {
 
@@ -130,9 +126,7 @@
                     warningElement.classList.remove(
                         'd-none'
                     );
-
                 }
-
             }
 
         } else {
@@ -158,11 +152,8 @@
                 statusElement.classList.add(
                     'bg-success'
                 );
-
             }
-
         }
-
     }
 
 
@@ -176,7 +167,6 @@
 
         updateCountdown();
 
-
         countdownInterval = setInterval(
             function () {
 
@@ -185,17 +175,12 @@
                 updateCountdown();
 
 
-                /*
-                |--------------------------------------------------------------------------
-                | Session Expired
-                |--------------------------------------------------------------------------
-                */
-
                 if (remaining <= 0) {
 
                     clearInterval(
                         countdownInterval
                     );
+
 
                     if (statusElement) {
 
@@ -210,19 +195,16 @@
                         statusElement.classList.add(
                             'bg-secondary'
                         );
-
                     }
 
 
                     window.location.href =
                         'logout.php?expired=1';
-
                 }
 
             },
             1000
         );
-
     }
 
 
@@ -240,7 +222,6 @@
             return;
         }
 
-
         refreshInProgress = true;
 
 
@@ -251,7 +232,13 @@
 
                 headers: {
                     'X-Requested-With':
-                        'XMLHttpRequest'
+                        'XMLHttpRequest',
+
+                    'X-CSRF-TOKEN':
+                        csrfToken,
+
+                    'Content-Type':
+                        'application/json'
                 },
 
                 credentials: 'same-origin'
@@ -265,8 +252,16 @@
                 throw new Error(
                     'expired'
                 );
-
             }
+
+
+            if (response.status === 419) {
+
+                throw new Error(
+                    'csrf'
+                );
+            }
+
 
             return response.json();
 
@@ -277,9 +272,8 @@
             if (!data.success) {
 
                 throw new Error(
-                    'expired'
+                    data.message || 'expired'
                 );
-
             }
 
 
@@ -308,7 +302,6 @@
                 warningElement.classList.add(
                     'd-none'
                 );
-
             }
 
 
@@ -331,7 +324,6 @@
                 statusElement.classList.add(
                     'bg-success'
                 );
-
             }
 
 
@@ -346,7 +338,6 @@
                 showRefreshMessage(
                     'Session extended successfully.'
                 );
-
             }
 
 
@@ -356,7 +347,11 @@
 
         .catch(function (error) {
 
-            console.error(error);
+            console.error(
+                'Session refresh error:',
+                error
+            );
+
 
             window.location.href =
                 'index.php?expired=1';
@@ -372,7 +367,6 @@
                 Date.now();
 
         });
-
     }
 
 
@@ -408,13 +402,12 @@
             messageElement.remove();
 
         }, 3000);
-
     }
 
 
     /*
     |--------------------------------------------------------------------------
-    | Stay Logged In Button
+    | Stay Logged In
     |--------------------------------------------------------------------------
     */
 
@@ -428,7 +421,6 @@
 
             }
         );
-
     }
 
 
@@ -449,7 +441,6 @@
 
             }
         );
-
     }
 
 
@@ -478,27 +469,14 @@
                         Date.now();
 
 
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Don't continuously hit server
-                    |--------------------------------------------------------------------------
-                    */
-
                     if (
                         now - lastRefresh <
                         30000
                     ) {
 
                         return;
-
                     }
 
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Only automatically refresh near expiration
-                    |--------------------------------------------------------------------------
-                    */
 
                     if (
                         remaining >
@@ -506,7 +484,6 @@
                     ) {
 
                         return;
-
                     }
 
 
@@ -519,18 +496,16 @@
                     passive: true
                 }
             );
-
         }
     );
 
 
     /*
     |--------------------------------------------------------------------------
-    | Start Countdown
+    | Start
     |--------------------------------------------------------------------------
     */
 
     startCountdown();
-
 
 })();

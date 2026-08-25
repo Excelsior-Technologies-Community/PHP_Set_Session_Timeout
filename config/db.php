@@ -1,6 +1,7 @@
 <?php
+
 $host = '127.0.0.1';
-$db   = 'PHP_Set_Session_Timeou';
+$db   = 'php_set_session_timeout';
 $user = 'root';
 $pass = '';
 $charset = 'utf8mb4';
@@ -14,8 +15,19 @@ $options = [
 ];
 
 try {
-    $pdo = new PDO($dsn, $user, $pass, $options);
+
+    $pdo = new PDO(
+        $dsn,
+        $user,
+        $pass,
+        $options
+    );
+
 } catch (PDOException $e) {
-    throw new PDOException($e->getMessage(), (int) $e->getCode());
+
+    throw new PDOException(
+        $e->getMessage(),
+        (int) $e->getCode()
+    );
+
 }
-?>

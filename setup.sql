@@ -1,5 +1,3 @@
--- Database: PHP_Set_Session_Timeou
-
 CREATE DATABASE IF NOT EXISTS PHP_Set_Session_Timeou
     DEFAULT CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
@@ -8,15 +6,29 @@ USE PHP_Set_Session_Timeou;
 
 
 -- ============================================================
--- USERS TABLE
+-- USERS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS users (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
     username VARCHAR(50) NOT NULL UNIQUE,
+
     password VARCHAR(255) NOT NULL,
-    role ENUM('admin', 'user') NOT NULL DEFAULT 'user',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+    role ENUM('admin', 'user')
+        NOT NULL DEFAULT 'user',
+
+    failed_attempts INT UNSIGNED
+        NOT NULL DEFAULT 0,
+
+    locked_until DATETIME NULL,
+
+    created_at TIMESTAMP
+        DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_locked_until (locked_until)
+
 ) ENGINE=InnoDB;
 
 
@@ -25,10 +37,15 @@ CREATE TABLE IF NOT EXISTS users (
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS remember_tokens (
+
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
     user_id INT UNSIGNED NOT NULL,
+
     selector VARCHAR(128) NOT NULL,
+
     token_hash VARCHAR(128) NOT NULL,
+
     expires_at INT UNSIGNED NOT NULL,
 
     FOREIGN KEY (user_id)
@@ -36,16 +53,18 @@ CREATE TABLE IF NOT EXISTS remember_tokens (
         ON DELETE CASCADE,
 
     INDEX idx_selector (selector),
+
     INDEX idx_user_id (user_id)
 
 ) ENGINE=InnoDB;
 
 
 -- ============================================================
--- SESSION ACTIVITY LOGS
+-- SESSION LOGS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS session_logs (
+
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 
     user_id INT UNSIGNED NULL,
@@ -56,14 +75,17 @@ CREATE TABLE IF NOT EXISTS session_logs (
 
     user_agent TEXT NULL,
 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP
+        DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (user_id)
         REFERENCES users(id)
         ON DELETE SET NULL,
 
     INDEX idx_user_id (user_id),
+
     INDEX idx_event (event),
+
     INDEX idx_created_at (created_at)
 
 ) ENGINE=InnoDB;

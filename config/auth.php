@@ -1,26 +1,49 @@
 <?php
 
+/*
+|--------------------------------------------------------------------------
+| Authentication Configuration
+|--------------------------------------------------------------------------
+*/
+
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-require_once __DIR__ . '/db.php';
+
+/*
+|--------------------------------------------------------------------------
+| Login Security
+|--------------------------------------------------------------------------
+*/
+
+define('MAX_LOGIN_ATTEMPTS', 5);
+
+define('LOGIN_LOCK_SECONDS', 60);
 
 
 /*
 |--------------------------------------------------------------------------
 | Session Configuration
 |--------------------------------------------------------------------------
+|
+| 120 seconds = 2 minutes
+| 20 seconds = warning before expiry
+|
 */
 
-const SESSION_TIMEOUT = 120;          // 2 minutes
-const SESSION_WARNING_TIME = 30;      // Warning at 30 seconds
-const REMEMBER_ME_DAYS = 30;
+if (!defined('SESSION_TIMEOUT')) {
+    define('SESSION_TIMEOUT', 120);
+}
+
+if (!defined('SESSION_WARNING_TIME')) {
+    define('SESSION_WARNING_TIME', 20);
+}
 
 
 /*
 |--------------------------------------------------------------------------
-| Authentication Helpers
+| Check User Logged In
 |--------------------------------------------------------------------------
 */
 
@@ -32,21 +55,85 @@ function isLoggedIn(): bool
 
 /*
 |--------------------------------------------------------------------------
-| Current User
+| Require Authentication
 |--------------------------------------------------------------------------
 */
 
-function currentUser(PDO $pdo): ?array
-{
+function requireAuth(
+    PDO $pdo,
+    ?string $requiredRole = null
+): array {
+
+    /*
+    |----------------------------------------------------------------------
+    | Not Logged In
+    |----------------------------------------------------------------------
+    */
+
     if (!isLoggedIn()) {
-        return null;
+
+        header('Location: index.php');
+
+        exit();
     }
 
-    $stmt = $pdo->prepare(
-        "SELECT id, username, role
-         FROM users
-         WHERE id = ?"
-    );
+
+    /*
+    |----------------------------------------------------------------------
+    | Check Session Expiration
+    |----------------------------------------------------------------------
+    */
+
+    if (isSessionExpired()) {
+
+        $userId = (int) $_SESSION['user_id'];
+
+        logSessionEvent(
+            $pdo,
+            $userId,
+            'session_expired'
+        );
+
+        destroyUserSession(
+            $pdo,
+            false
+        );
+
+        header('Location: index.php?expired=1');
+
+        exit();
+    }
+
+
+    /*
+    |----------------------------------------------------------------------
+    | Role Check
+    |----------------------------------------------------------------------
+    */
+
+    if (
+        $requiredRole !== null &&
+        ($_SESSION['role'] ?? null) !== $requiredRole
+    ) {
+
+        http_response_code(403);
+
+        exit('Access denied.');
+    }
+
+
+    /*
+    |----------------------------------------------------------------------
+    | Get User
+    |----------------------------------------------------------------------
+    */
+
+    $stmt = $pdo->prepare("
+        SELECT *
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+    ");
 
     $stmt->execute([
         $_SESSION['user_id']
@@ -54,91 +141,46 @@ function currentUser(PDO $pdo): ?array
 
     $user = $stmt->fetch();
 
-    return $user ?: null;
-}
 
+    /*
+    |----------------------------------------------------------------------
+    | User No Longer Exists
+    |----------------------------------------------------------------------
+    */
 
-/*
-|--------------------------------------------------------------------------
-| Get Client IP Address
-|--------------------------------------------------------------------------
-*/
+    if (!$user) {
 
-function getClientIp(): string
-{
-    return $_SERVER['REMOTE_ADDR'] ?? 'UNKNOWN';
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Get User Agent
-|--------------------------------------------------------------------------
-*/
-
-function getUserAgent(): string
-{
-    return $_SERVER['HTTP_USER_AGENT'] ?? 'UNKNOWN';
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Session Activity Logger
-|--------------------------------------------------------------------------
-*/
-
-function logSessionEvent(
-    PDO $pdo,
-    ?int $userId,
-    string $event
-): void {
-
-    try {
-
-        $stmt = $pdo->prepare(
-            "INSERT INTO session_logs
-            (user_id, event, ip_address, user_agent)
-            VALUES (?, ?, ?, ?)"
+        destroyUserSession(
+            $pdo,
+            false
         );
 
-        $stmt->execute([
-            $userId,
-            $event,
-            getClientIp(),
-            getUserAgent()
-        ]);
+        header('Location: index.php');
 
-    } catch (Throwable $e) {
-
-        /*
-        |--------------------------------------------------------------------------
-        | Logging must never break authentication
-        |--------------------------------------------------------------------------
-        */
-
-        error_log(
-            'Session logging error: ' . $e->getMessage()
-        );
+        exit();
     }
+
+
+    return $user;
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| Check Session Expiration
+| Session Expired Check
 |--------------------------------------------------------------------------
 */
 
 function isSessionExpired(): bool
 {
     if (!isset($_SESSION['LAST_ACTIVITY'])) {
-        return false;
+        return true;
     }
 
     return (
-        time() - $_SESSION['LAST_ACTIVITY']
-    ) > SESSION_TIMEOUT;
+        time() -
+        $_SESSION['LAST_ACTIVITY']
+    ) >= SESSION_TIMEOUT;
 }
 
 
@@ -162,59 +204,51 @@ function refreshSessionActivity(): void
 
 function destroyUserSession(
     PDO $pdo,
-    bool $logEvent = true
+    bool $logLogout = true
 ): void {
 
-    /*
-    |--------------------------------------------------------------------------
-    | Save User ID Before Destroying Session
-    |--------------------------------------------------------------------------
-    */
-
-    $userId = isset($_SESSION['user_id'])
-        ? (int) $_SESSION['user_id']
-        : null;
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Log Event
-    |--------------------------------------------------------------------------
-    */
-
-    if ($logEvent && $userId !== null) {
+    if (
+        $logLogout &&
+        isset($_SESSION['user_id'])
+    ) {
 
         logSessionEvent(
             $pdo,
-            $userId,
-            'session_expired'
+            (int) $_SESSION['user_id'],
+            'logout'
         );
     }
 
 
     /*
-    |--------------------------------------------------------------------------
-    | Remove Remember Me
-    |--------------------------------------------------------------------------
+    |----------------------------------------------------------------------
+    | Clear Remember Me Cookie
+    |----------------------------------------------------------------------
     */
 
-    clearRememberCookie($pdo);
+    if (isset($_COOKIE['remember_token'])) {
+
+        setcookie(
+            'remember_token',
+            '',
+            [
+                'expires' => time() - 3600,
+                'path' => '/',
+                'httponly' => true,
+                'samesite' => 'Lax'
+            ]
+        );
+    }
 
 
     /*
-    |--------------------------------------------------------------------------
-    | Clear Session
-    |--------------------------------------------------------------------------
+    |----------------------------------------------------------------------
+    | Destroy Session
+    |----------------------------------------------------------------------
     */
 
     $_SESSION = [];
 
-
-    /*
-    |--------------------------------------------------------------------------
-    | Remove Session Cookie
-    |--------------------------------------------------------------------------
-    */
 
     if (ini_get('session.use_cookies')) {
 
@@ -232,393 +266,253 @@ function destroyUserSession(
     }
 
 
-    /*
-    |--------------------------------------------------------------------------
-    | Destroy Session
-    |--------------------------------------------------------------------------
-    */
-
     session_destroy();
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| Require Authentication
+| Session Event Logging
 |--------------------------------------------------------------------------
 */
 
-function requireAuth(
+function logSessionEvent(
     PDO $pdo,
-    ?string $role = null
-): array {
-
-    /*
-    |--------------------------------------------------------------------------
-    | Try Remember Me
-    |--------------------------------------------------------------------------
-    */
-
-    if (!isLoggedIn()) {
-
-        if (!checkRememberMe($pdo)) {
-
-            header("Location: index.php");
-
-            exit();
-        }
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Session Timeout
-    |--------------------------------------------------------------------------
-    */
-
-    if (isSessionExpired()) {
-
-        destroyUserSession($pdo);
-
-        header("Location: index.php?expired=1");
-
-        exit();
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Get User
-    |--------------------------------------------------------------------------
-    */
-
-    $user = currentUser($pdo);
-
-    if ($user === null) {
-
-        destroyUserSession(
-            $pdo,
-            false
-        );
-
-        header("Location: index.php");
-
-        exit();
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Role Check
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-        $role !== null &&
-        $user['role'] !== $role
-    ) {
-
-        $dest = $user['role'] === 'admin'
-            ? 'admin.php'
-            : 'dashboard.php';
-
-        header("Location: $dest");
-
-        exit();
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Refresh Activity
-    |--------------------------------------------------------------------------
-    */
-
-    refreshSessionActivity();
-
-
-    return $user;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Remember Me
-|--------------------------------------------------------------------------
-*/
-
-function checkRememberMe(PDO $pdo): bool
-{
-    if (isset($_SESSION['user_id'])) {
-        return true;
-    }
-
-
-    if (!isset($_COOKIE['remember'])) {
-        return false;
-    }
-
-
-    $parts = explode(
-        ':',
-        $_COOKIE['remember'],
-        2
-    );
-
-
-    if (count($parts) !== 2) {
-
-        clearRememberCookie($pdo);
-
-        return false;
-    }
-
-
-    [$selector, $token] = $parts;
-
-
-    $tokenHash = hash(
-        'sha256',
-        $token
-    );
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Find Token
-    |--------------------------------------------------------------------------
-    */
-
-    $stmt = $pdo->prepare(
-        "SELECT *
-         FROM remember_tokens
-         WHERE selector = ?
-         AND expires_at > ?"
-    );
-
-    $stmt->execute([
-        $selector,
-        time()
-    ]);
-
-    $row = $stmt->fetch();
-
-
-    if (!$row) {
-
-        clearRememberCookie($pdo);
-
-        return false;
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Verify Token
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-        !hash_equals(
-            $row['token_hash'],
-            $tokenHash
-        )
-    ) {
-
-        clearRememberCookie($pdo);
-
-        return false;
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Find User
-    |--------------------------------------------------------------------------
-    */
-
-    $userStmt = $pdo->prepare(
-        "SELECT id, username, role
-         FROM users
-         WHERE id = ?"
-    );
-
-    $userStmt->execute([
-        $row['user_id']
-    ]);
-
-    $user = $userStmt->fetch();
-
-
-    if (!$user) {
-
-        clearRememberCookie($pdo);
-
-        return false;
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Regenerate Session
-    |--------------------------------------------------------------------------
-    */
-
-    session_regenerate_id(true);
-
-
-    $_SESSION['user_id'] =
-        $user['id'];
-
-    $_SESSION['user'] =
-        $user['username'];
-
-    $_SESSION['role'] =
-        $user['role'];
-
-    $_SESSION['LAST_ACTIVITY'] =
-        time();
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Log Remember Me Login
-    |--------------------------------------------------------------------------
-    */
-
-    logSessionEvent(
-        $pdo,
-        (int) $user['id'],
-        'remember_me_login'
-    );
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Extend Remember Token
-    |--------------------------------------------------------------------------
-    */
-
-    $newExpiry =
-        time() +
-        (86400 * REMEMBER_ME_DAYS);
-
-
-    $updateStmt = $pdo->prepare(
-        "UPDATE remember_tokens
-         SET expires_at = ?
-         WHERE id = ?"
-    );
-
-    $updateStmt->execute([
-        $newExpiry,
-        $row['id']
-    ]);
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Refresh Cookie
-    |--------------------------------------------------------------------------
-    */
-
-    setcookie(
-        'remember',
-        "$selector:$token",
-        [
-            'expires' => $newExpiry,
-            'path' => '/',
-            'secure' => false,
-            'httponly' => true,
-            'samesite' => 'Lax'
-        ]
-    );
-
-
-    return true;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Set Remember Me Cookie
-|--------------------------------------------------------------------------
-*/
-
-function setRememberCookie(
-    PDO $pdo,
-    int $userId
+    ?int $userId,
+    string $event
 ): void {
 
-    $selector =
-        bin2hex(random_bytes(12));
-
-    $token =
-        bin2hex(random_bytes(32));
-
-    $tokenHash =
-        hash('sha256', $token);
-
-    $expires =
-        time() +
-        (86400 * REMEMBER_ME_DAYS);
-
-
     /*
-    |--------------------------------------------------------------------------
-    | Delete Existing Tokens
-    |--------------------------------------------------------------------------
+    |----------------------------------------------------------------------
+    | Make sure session_logs table exists
+    |----------------------------------------------------------------------
     */
 
-    $deleteStmt = $pdo->prepare(
-        "DELETE FROM remember_tokens
-         WHERE user_id = ?"
-    );
+    $ipAddress =
+        $_SERVER['REMOTE_ADDR']
+        ?? null;
 
-    $deleteStmt->execute([
+
+    $stmt = $pdo->prepare("
+        INSERT INTO session_logs
+        (
+            user_id,
+            event,
+            ip_address,
+            created_at
+        )
+        VALUES
+        (
+            ?,
+            ?,
+            ?,
+            NOW()
+        )
+    ");
+
+
+    $stmt->execute([
+        $userId,
+        $event,
+        $ipAddress
+    ]);
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Reset Expired Login Lock
+|--------------------------------------------------------------------------
+*/
+
+function resetExpiredLoginLock(
+    PDO $pdo,
+    array &$user
+): void {
+
+    if (
+        !empty($user['locked_until']) &&
+        strtotime($user['locked_until']) <= time()
+    ) {
+
+        $stmt = $pdo->prepare("
+            UPDATE users
+            SET
+                failed_attempts = 0,
+                locked_until = NULL
+            WHERE id = ?
+        ");
+
+        $stmt->execute([
+            $user['id']
+        ]);
+
+
+        $user['failed_attempts'] = 0;
+
+        $user['locked_until'] = null;
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Check Account Locked
+|--------------------------------------------------------------------------
+*/
+
+function isAccountLocked(
+    array $user
+): bool {
+
+    if (
+        empty($user['locked_until'])
+    ) {
+
+        return false;
+    }
+
+
+    return
+        strtotime(
+            $user['locked_until']
+        ) > time();
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Get Lock Remaining Seconds
+|--------------------------------------------------------------------------
+*/
+
+function getLockRemainingSeconds(
+    array $user
+): int {
+
+    if (
+        empty($user['locked_until'])
+    ) {
+
+        return 0;
+    }
+
+
+    return max(
+        0,
+        strtotime(
+            $user['locked_until']
+        ) - time()
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Record Failed Login
+|--------------------------------------------------------------------------
+*/
+
+function recordFailedLogin(
+    PDO $pdo,
+    int $userId
+): int {
+
+    $stmt = $pdo->prepare("
+        SELECT failed_attempts
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+    ");
+
+    $stmt->execute([
         $userId
     ]);
 
 
-    /*
-    |--------------------------------------------------------------------------
-    | Store New Token
-    |--------------------------------------------------------------------------
-    */
+    $attempts =
+        (int) $stmt->fetchColumn();
 
-    $stmt = $pdo->prepare(
-        "INSERT INTO remember_tokens
-        (user_id, selector, token_hash, expires_at)
-        VALUES (?, ?, ?, ?)"
-    );
 
-    $stmt->execute([
-        $userId,
-        $selector,
-        $tokenHash,
-        $expires
-    ]);
+    $attempts++;
 
 
     /*
-    |--------------------------------------------------------------------------
-    | Cookie
-    |--------------------------------------------------------------------------
+    |----------------------------------------------------------------------
+    | Lock After 5 Attempts
+    |----------------------------------------------------------------------
     */
 
-    setcookie(
-        'remember',
-        "$selector:$token",
-        [
-            'expires' => $expires,
-            'path' => '/',
-            'secure' => false,
-            'httponly' => true,
-            'samesite' => 'Lax'
-        ]
-    );
+    if (
+        $attempts >= MAX_LOGIN_ATTEMPTS
+    ) {
+
+        $lockedUntil =
+            date(
+                'Y-m-d H:i:s',
+                time() + LOGIN_LOCK_SECONDS
+            );
+
+
+        $stmt = $pdo->prepare("
+            UPDATE users
+            SET
+                failed_attempts = ?,
+                locked_until = ?
+            WHERE id = ?
+        ");
+
+
+        $stmt->execute([
+            $attempts,
+            $lockedUntil,
+            $userId
+        ]);
+
+    } else {
+
+        $stmt = $pdo->prepare("
+            UPDATE users
+            SET failed_attempts = ?
+            WHERE id = ?
+        ");
+
+
+        $stmt->execute([
+            $attempts,
+            $userId
+        ]);
+    }
+
+
+    return $attempts;
 }
 
+
+/*
+|--------------------------------------------------------------------------
+| Reset Failed Login Attempts
+|--------------------------------------------------------------------------
+*/
+
+function resetFailedLoginAttempts(
+    PDO $pdo,
+    int $userId
+): void {
+
+    $stmt = $pdo->prepare("
+        UPDATE users
+        SET
+            failed_attempts = 0,
+            locked_until = NULL
+        WHERE id = ?
+    ");
+
+
+    $stmt->execute([
+        $userId
+    ]);
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -628,49 +522,56 @@ function setRememberCookie(
 
 function clearRememberCookie(PDO $pdo): void
 {
-    if (!isset($_COOKIE['remember'])) {
-        return;
-    }
+    /*
+    |----------------------------------------------------------------------
+    | Delete Remember Token From Database
+    |----------------------------------------------------------------------
+    */
 
+    if (!empty($_COOKIE['remember_token'])) {
 
-    $parts = explode(
-        ':',
-        $_COOKIE['remember'],
-        2
-    );
+        $token = $_COOKIE['remember_token'];
 
+        /*
+        |------------------------------------------------------------------
+        | Delete token
+        |------------------------------------------------------------------
+        */
 
-    if (count($parts) === 2) {
-
-        [$selector] = $parts;
-
-
-        $stmt = $pdo->prepare(
-            "DELETE FROM remember_tokens
-             WHERE selector = ?"
-        );
+        $stmt = $pdo->prepare("
+            DELETE FROM remember_tokens
+            WHERE token_hash = ?
+        ");
 
         $stmt->execute([
-            $selector
+            hash('sha256', $token)
         ]);
     }
 
 
     /*
-    |--------------------------------------------------------------------------
-    | Remove Cookie
-    |--------------------------------------------------------------------------
+    |----------------------------------------------------------------------
+    | Delete Browser Cookie
+    |----------------------------------------------------------------------
     */
 
     setcookie(
-        'remember',
+        'remember_token',
         '',
         [
             'expires' => time() - 3600,
             'path' => '/',
-            'secure' => false,
             'httponly' => true,
             'samesite' => 'Lax'
         ]
     );
+
+
+    /*
+    |----------------------------------------------------------------------
+    | Remove Current Request Cookie
+    |----------------------------------------------------------------------
+    */
+
+    unset($_COOKIE['remember_token']);
 }

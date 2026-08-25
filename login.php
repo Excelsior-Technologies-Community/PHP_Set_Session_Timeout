@@ -2,7 +2,40 @@
 
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/auth.php';
+require_once __DIR__ . '/config/csrf.php';
+require_once __DIR__ . '/config/security.php';
 
+applySecurityHeaders();
+
+
+/*
+|--------------------------------------------------------------------------
+| Only POST Requests
+|--------------------------------------------------------------------------
+*/
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+
+    header('Location: index.php');
+
+    exit();
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| CSRF Protection
+|--------------------------------------------------------------------------
+*/
+
+requireCsrfToken();
+
+
+/*
+|--------------------------------------------------------------------------
+| Get Input
+|--------------------------------------------------------------------------
+*/
 
 $username = trim(
     $_POST['username'] ?? ''
@@ -10,7 +43,9 @@ $username = trim(
 
 $password = $_POST['password'] ?? '';
 
-$remember = isset($_POST['remember']);
+$remember = isset(
+    $_POST['remember']
+);
 
 
 /*
@@ -30,7 +65,9 @@ if (
         'failed_login'
     );
 
-    header("Location: index.php?error=1");
+    header(
+        'Location: index.php?error=1'
+    );
 
     exit();
 }
@@ -42,11 +79,18 @@ if (
 |--------------------------------------------------------------------------
 */
 
-$stmt = $pdo->prepare(
-    "SELECT id, username, password, role
-     FROM users
-     WHERE username = ?"
-);
+$stmt = $pdo->prepare("
+    SELECT
+        id,
+        username,
+        password,
+        role,
+        failed_attempts,
+        locked_until
+    FROM users
+    WHERE username = ?
+    LIMIT 1
+");
 
 $stmt->execute([
     $username
@@ -57,88 +101,27 @@ $user = $stmt->fetch();
 
 /*
 |--------------------------------------------------------------------------
-| Verify Login
+| User Not Found
 |--------------------------------------------------------------------------
 */
 
-if (
-    $user &&
-    password_verify(
-        $password,
-        $user['password']
-    )
-) {
-
-    /*
-    |--------------------------------------------------------------------------
-    | Prevent Session Fixation
-    |--------------------------------------------------------------------------
-    */
-
-    session_regenerate_id(true);
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Create Session
-    |--------------------------------------------------------------------------
-    */
-
-    $_SESSION['user_id'] =
-        $user['id'];
-
-    $_SESSION['user'] =
-        $user['username'];
-
-    $_SESSION['role'] =
-        $user['role'];
-
-    $_SESSION['LAST_ACTIVITY'] =
-        time();
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Log Successful Login
-    |--------------------------------------------------------------------------
-    */
+if (!$user) {
 
     logSessionEvent(
         $pdo,
-        (int) $user['id'],
-        'login'
+        null,
+        'failed_login'
     );
 
-
     /*
     |--------------------------------------------------------------------------
-    | Remember Me
+    | Do Not Reveal Whether Username Exists
     |--------------------------------------------------------------------------
     */
 
-    if ($remember) {
-
-        setRememberCookie(
-            $pdo,
-            (int) $user['id']
-        );
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Redirect
-    |--------------------------------------------------------------------------
-    */
-
-    if ($user['role'] === 'admin') {
-
-        header("Location: admin.php");
-
-    } else {
-
-        header("Location: dashboard.php");
-    }
+    header(
+        'Location: index.php?error=1'
+    );
 
     exit();
 }
@@ -146,17 +129,195 @@ if (
 
 /*
 |--------------------------------------------------------------------------
-| Failed Login
+| Reset Expired Lock
+|--------------------------------------------------------------------------
+*/
+
+resetExpiredLoginLock(
+    $pdo,
+    $user
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| Check Account Lock
+|--------------------------------------------------------------------------
+*/
+
+if (isAccountLocked($user)) {
+
+    $seconds = getLockRemainingSeconds(
+        $user
+    );
+
+    header(
+        'Location: index.php?locked=1&seconds=' .
+        $seconds
+    );
+
+    exit();
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Verify Password
+|--------------------------------------------------------------------------
+*/
+
+if (
+    !password_verify(
+        $password,
+        $user['password']
+    )
+) {
+
+    /*
+    |--------------------------------------------------------------------------
+    | Record Failed Attempt
+    |--------------------------------------------------------------------------
+    */
+
+    $attempts = recordFailedLogin(
+        $pdo,
+        (int) $user['id']
+    );
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Log Failed Login
+    |--------------------------------------------------------------------------
+    */
+
+    logSessionEvent(
+        $pdo,
+        (int) $user['id'],
+        'failed_login'
+    );
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Account Locked
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+        $attempts >= MAX_LOGIN_ATTEMPTS
+    ) {
+
+        header(
+            'Location: index.php?locked=1&seconds=' .
+            LOGIN_LOCK_SECONDS
+        );
+
+        exit();
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Wrong Password
+    |--------------------------------------------------------------------------
+    */
+
+    header(
+        'Location: index.php?error=1&attempts=' .
+        $attempts
+    );
+
+    exit();
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Successful Login
+|--------------------------------------------------------------------------
+*/
+
+resetFailedLoginAttempts(
+    $pdo,
+    (int) $user['id']
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| Regenerate Session ID
+|--------------------------------------------------------------------------
+*/
+
+session_regenerate_id(true);
+
+
+/*
+|--------------------------------------------------------------------------
+| Create Session
+|--------------------------------------------------------------------------
+*/
+
+$_SESSION['user_id'] =
+    (int) $user['id'];
+
+$_SESSION['user'] =
+    $user['username'];
+
+$_SESSION['role'] =
+    $user['role'];
+
+$_SESSION['LAST_ACTIVITY'] =
+    time();
+
+
+/*
+|--------------------------------------------------------------------------
+| Login Event
 |--------------------------------------------------------------------------
 */
 
 logSessionEvent(
     $pdo,
-    $user ? (int) $user['id'] : null,
-    'failed_login'
+    (int) $user['id'],
+    'login'
 );
 
 
-header("Location: index.php?error=1");
+/*
+|--------------------------------------------------------------------------
+| Remember Me
+|--------------------------------------------------------------------------
+*/
+
+if ($remember) {
+
+    setRememberCookie(
+        $pdo,
+        (int) $user['id']
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Redirect According to Role
+|--------------------------------------------------------------------------
+*/
+
+if ($user['role'] === 'admin') {
+
+    header(
+        'Location: admin.php'
+    );
+
+} else {
+
+    header(
+        'Location: dashboard.php'
+    );
+}
+
 
 exit();

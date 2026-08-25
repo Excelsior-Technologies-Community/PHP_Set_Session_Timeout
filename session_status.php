@@ -2,15 +2,30 @@
 
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/auth.php';
+require_once __DIR__ . '/config/csrf.php';
+require_once __DIR__ . '/config/security.php';
 
-header('Content-Type: application/json');
+applySecurityHeaders();
+
+header(
+    'Content-Type: application/json'
+);
 
 
-/*
-|--------------------------------------------------------------------------
-| Authentication Check
-|--------------------------------------------------------------------------
-*/
+if (
+    $_SERVER['REQUEST_METHOD'] !== 'POST'
+) {
+
+    http_response_code(405);
+
+    echo json_encode([
+        'success' => false,
+        'message' => 'Method not allowed.'
+    ]);
+
+    exit();
+}
+
 
 if (!isLoggedIn()) {
 
@@ -26,15 +41,35 @@ if (!isLoggedIn()) {
 }
 
 
+$token =
+    $_SERVER['HTTP_X_CSRF_TOKEN']
+    ?? $_POST['_csrf_token']
+    ?? null;
+
+
+if (!verifyCsrfToken($token)) {
+
+    http_response_code(419);
+
+    echo json_encode([
+        'success' => false,
+        'message' => 'CSRF token validation failed.'
+    ]);
+
+    exit();
+}
+
+
 /*
 |--------------------------------------------------------------------------
-| Session Expiration Check
+| Session Expiration
 |--------------------------------------------------------------------------
 */
 
 if (isSessionExpired()) {
 
-    $userId = (int) $_SESSION['user_id'];
+    $userId =
+        (int) $_SESSION['user_id'];
 
 
     logSessionEvent(
@@ -71,13 +106,9 @@ if (isSessionExpired()) {
 refreshSessionActivity();
 
 
-/*
-|--------------------------------------------------------------------------
-| Log Session Renewal
-|--------------------------------------------------------------------------
-*/
+$userId =
+    (int) $_SESSION['user_id'];
 
-$userId = (int) $_SESSION['user_id'];
 
 logSessionEvent(
     $pdo,
@@ -85,12 +116,6 @@ logSessionEvent(
     'session_renewed'
 );
 
-
-/*
-|--------------------------------------------------------------------------
-| Calculate Remaining Time
-|--------------------------------------------------------------------------
-*/
 
 $remaining =
     SESSION_TIMEOUT -
@@ -100,16 +125,12 @@ $remaining =
     );
 
 
-if ($remaining < 0) {
-    $remaining = 0;
-}
+$remaining =
+    max(
+        0,
+        $remaining
+    );
 
-
-/*
-|--------------------------------------------------------------------------
-| Return Status
-|--------------------------------------------------------------------------
-*/
 
 echo json_encode([
     'success' => true,
@@ -117,7 +138,8 @@ echo json_encode([
     'remaining' => $remaining,
     'timeout' => SESSION_TIMEOUT,
     'warning' => SESSION_WARNING_TIME,
-    'last_activity' => $_SESSION['LAST_ACTIVITY']
+    'last_activity' =>
+    $_SESSION['LAST_ACTIVITY']
 ]);
 
 exit();
